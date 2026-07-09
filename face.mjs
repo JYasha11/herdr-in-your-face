@@ -24,29 +24,75 @@ const STATE_DIR = process.env.HERDR_PLUGIN_STATE_DIR;
 const BLOCKED_DIR = join(STATE_DIR, "blocked");
 const OVERLAY_PATH = join(STATE_DIR, "overlay.json");
 
-// Stage 3 turns this into an escalation ladder of faces.
+// The escalation ladder. Every face shares one outline; only the six
+// middle rows (eyes + mouth) change per stage, so the layout never jumps.
 // (Plain strings, not template literals: art lines end in "\", which would
 // escape a template literal's closing backtick.)
-const FACE = [
+const FACE_TOP = [
   "        .-''''''''''''''-.",
   "      .'                  '.",
   "     /                      \\",
-  "    |     ____      ____     |",
-  "    |     \\___\\     \\___\\    |",
-  "    |                        |",
-  "    |                        |",
-  "    |     ______________     |",
-  "    |    '--------------'    |",
+];
+const FACE_BOTTOM = [
   "     \\                      /",
   "      '.                  .'",
   "        '-..............-'",
 ];
-const HEADLINE = "AHEM.";
+const MIDDLES = {
+  annoyed: [
+    "    |     ____      ____     |",
+    "    |     \\___\\     \\___\\    |",
+    "    |                        |",
+    "    |                        |",
+    "    |     ______________     |",
+    "    |    '--------------'    |",
+  ],
+  concerned: [
+    "    |     __         __      |",
+    "    |    ( o )      ( o )    |",
+    "    |                        |",
+    "    |                        |",
+    "    |        ________        |",
+    "    |       /        \\       |",
+  ],
+  screaming: [
+    "    |    \\(O)/     \\(O)/     |",
+    "    |       __________       |",
+    "    |      |          |      |",
+    "    |      | AAAAAAAA |      |",
+    "    |      |__________|      |",
+    "    |                        |",
+  ],
+};
 
-// Face lines are padded to one width so they all get the same centering
-// offset — centering each line by its own length would skew the art.
-const FACE_W = Math.max(...FACE.map((l) => l.length));
-for (let i = 0; i < FACE.length; i++) FACE[i] = FACE[i].padEnd(FACE_W);
+// Time thresholds (from the moment the agent blocked) at which each stage
+// takes over. Stage 6 makes these configurable; the env var is a dev knob.
+const STAGES_MS = (process.env.IYF_STAGES_MS ?? "30000,120000,300000")
+  .split(",")
+  .map(Number);
+
+const STAGES = [
+  { middle: MIDDLES.annoyed, headline: "AHEM.", color: "" },
+  { middle: MIDDLES.concerned, headline: "HELLO? HELLO?", color: "\x1b[33m" },
+  { middle: MIDDLES.screaming, headline: "AAAAAAAAAAAAAAAH!!", color: "\x1b[1;31m" },
+].map((s) => ({ ...s, face: padBlock([...FACE_TOP, ...s.middle, ...FACE_BOTTOM]) }));
+
+// Highest stage whose threshold the wait has passed; below the first
+// threshold (possible when the grace period is shorter) stay on stage 0.
+function stageFor(elapsedMs) {
+  let i = 0;
+  for (let s = 0; s < STAGES_MS.length && s < STAGES.length; s++) {
+    if (elapsedMs >= STAGES_MS[s]) i = s;
+  }
+  return STAGES[i];
+}
+
+// Pad lines to one width so they all get the same centering offset —
+// centering each line by its own length would skew the art.
+function padBlock(lines) {
+  const w = Math.max(...lines.map((l) => l.length));
+  return lines.map((l) => l.padEnd(w));
+}
 
 // Replace the grace timer's "opening" placeholder with our real pane id:
 // we own the one-overlay slot now.
@@ -98,10 +144,13 @@ function render() {
   if (entries.length === 0) return shutdown(false);
 
   const top = entries[0];
-  const lines = [...FACE, ""];
-  lines.push(`\x1b[1m${HEADLINE}\x1b[0m`, "");
+  const elapsed = Date.now() - top.since;
+  const stage = stageFor(elapsed);
+  const paint = (l) => (stage.color ? stage.color + l + "\x1b[0m" : l);
+  const lines = stage.face.map(paint);
+  lines.push("", `\x1b[1m${stage.color}${stage.headline}\x1b[0m`, "");
   lines.push(
-    `${top.agent} in ${top.workspace_id} has been waiting for \x1b[1m${fmtDur(Date.now() - top.since)}\x1b[0m`,
+    `${top.agent} in ${top.workspace_id} has been waiting for \x1b[1m${fmtDur(elapsed)}\x1b[0m`,
   );
   if (entries.length > 1) {
     const others = entries

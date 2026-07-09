@@ -49,6 +49,12 @@ function handleEvent() {
   const d = JSON.parse(process.env.HERDR_PLUGIN_EVENT_JSON ?? "{}").data ?? {};
   if (!d.pane_id) return;
 
+  // Never track the overlay's own pane. Its rendered text (agent names,
+  // "waiting", a node process) can trip herdr's agent screen-detection, and
+  // the plugin shaming its own face is a feedback loop. Seen in the wild.
+  const overlay = readJson(OVERLAY_PATH);
+  if (overlay && d.pane_id === overlay.pane) return;
+
   if (d.agent_status === "blocked") {
     mkdirSync(BLOCKED_DIR, { recursive: true });
     const since = Date.now();
@@ -92,11 +98,11 @@ async function graceTimer(paneId, since) {
   if (!entry || entry.since !== since) return;
   if (!claimOverlaySlot()) return; // an overlay is already up; it lists everyone
 
-  const res = spawnSync(
-    HERDR,
-    ["plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", "face", "--focus"],
-    { encoding: "utf8" },
-  );
+  const openArgs = ["plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", "face", "--focus"];
+  // Pane processes get a clean environment (unlike event hooks, which inherit
+  // the server's), so the dev/testing knob must be forwarded explicitly.
+  if (process.env.IYF_STAGES_MS) openArgs.push("--env", `IYF_STAGES_MS=${process.env.IYF_STAGES_MS}`);
+  const res = spawnSync(HERDR, openArgs, { encoding: "utf8" });
   if (res.status !== 0) {
     // Couldn't open — log it (this process is detached, nothing else will)
     // and release the claim so a later timer can retry.

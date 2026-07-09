@@ -178,3 +178,18 @@ definition of done. Stage 1 smoke test: fake a blocked state, then
 - Testing override: set `IYF_GRACE_MS` in the *server's* environment (export
   it before launching `herdr`) to shrink the grace period during manual
   tests; event hooks inherit the server env.
+- **Event hooks inherit the server env; plugin pane processes get a clean
+  one.** A knob meant for the pane must be forwarded via
+  `herdr plugin pane open --env KEY=VALUE` (that's how `IYF_STAGES_MS`
+  reaches `face.mjs`).
+- **The overlay can shame itself.** herdr's agent screen-detection watches
+  every pane; an overlay that prints agent names and "waiting" from a node
+  process can get detected as a blocked agent, which re-feeds the plugin —
+  a feedback loop we hit live (`w9:p5`). Two defenses: the hook ignores any
+  event whose pane is the current overlay, and
+  `herdr agent explain --file <render.txt> --agent claude` is the offline
+  way to check whether rendered content trips a detection rule.
+- When faking states with `pane report-agent` on a plain shell pane,
+  herdr's own detection eventually overrides the report (idle fallback), so
+  the fake "agent" auto-releases after a minute or so. Real agents don't
+  flap like this — it's a test artifact.
