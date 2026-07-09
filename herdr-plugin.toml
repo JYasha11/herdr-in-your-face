@@ -14,3 +14,14 @@ id = "face"
 title = "IN YOUR FACE"
 placement = "overlay"
 command = ["node", "face.mjs"]
+
+[[panes]]
+id = "report"
+title = "The Shame Report"
+placement = "overlay"
+command = ["node", "face.mjs", "report"]
+
+[[actions]]
+id = "shame-report"
+title = "Show the shame report"
+command = ["node", "hook.mjs", "report"]

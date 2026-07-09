@@ -39,25 +39,44 @@ const STATE_DIR = process.env.HERDR_PLUGIN_STATE_DIR;
 const BLOCKED_DIR = join(STATE_DIR, "blocked");
 const OVERLAY_PATH = join(STATE_DIR, "overlay.json");
 const LEDGER_PATH = join(STATE_DIR, "ledger.jsonl");
+const REPORT_PATH = join(STATE_DIR, "report.json");
 
 // ":" in pane ids is unfriendly to filenames; the encoding is reversible
 const blockedPath = (paneId) => join(BLOCKED_DIR, encodeURIComponent(paneId) + ".json");
 
 if (process.argv[2] === "grace-timer") {
   await graceTimer(process.argv[3], Number(process.argv[4]));
+} else if (process.argv[2] === "report") {
+  openReport(); // backs the shame-report manifest action
 } else {
   handleEvent();
+}
+
+function openReport() {
+  const res = spawnSync(
+    HERDR,
+    ["plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", "report", "--focus"],
+    { encoding: "utf8" },
+  );
+  if (res.status !== 0) {
+    console.error(`could not open report pane: ${(res.stderr ?? "").trim()}`);
+    process.exit(1);
+  }
 }
 
 function handleEvent() {
   const d = JSON.parse(process.env.HERDR_PLUGIN_EVENT_JSON ?? "{}").data ?? {};
   if (!d.pane_id) return;
 
-  // Never track the overlay's own pane. Its rendered text (agent names,
+  // Never track the plugin's own panes. Their rendered text (agent names,
   // "waiting", a node process) can trip herdr's agent screen-detection, and
   // the plugin shaming its own face is a feedback loop. Seen in the wild.
+  // The report guard is time-bounded because pane ids can be reused across
+  // server restarts while a stale report.json lingers.
   const overlay = readJson(OVERLAY_PATH);
   if (overlay && d.pane_id === overlay.pane) return;
+  const report = readJson(REPORT_PATH);
+  if (report && d.pane_id === report.pane && Date.now() - report.at < 3600_000) return;
 
   if (d.agent_status === "blocked") {
     mkdirSync(BLOCKED_DIR, { recursive: true });
