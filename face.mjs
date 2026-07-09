@@ -14,6 +14,7 @@ import {
   renameSync,
   unlinkSync,
   readdirSync,
+  appendFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -23,6 +24,7 @@ const MY_PANE = process.env.HERDR_PANE_ID;
 const STATE_DIR = process.env.HERDR_PLUGIN_STATE_DIR;
 const BLOCKED_DIR = join(STATE_DIR, "blocked");
 const OVERLAY_PATH = join(STATE_DIR, "overlay.json");
+const LEDGER_PATH = join(STATE_DIR, "ledger.jsonl");
 
 // The escalation ladder. Every face shares one outline; only the six
 // middle rows (eyes + mouth) change per stage, so the layout never jumps.
@@ -174,9 +176,15 @@ function heal() {
   }
   for (const e of readBlocked()) {
     if (live.get(e.pane_id) !== "blocked") {
+      // Winning the unlink is the claim to credit this wait to the ledger
+      // (same rule as hook.mjs) — a pane killed without a release event
+      // still gets its time counted, and never twice.
       try {
         unlinkSync(join(BLOCKED_DIR, encodeURIComponent(e.pane_id) + ".json"));
-      } catch {}
+      } catch {
+        continue;
+      }
+      creditLedger(LEDGER_PATH, e);
     }
   }
 }
@@ -230,4 +238,23 @@ function writeJson(path, value) {
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(value, null, 2));
   renameSync(tmp, path);
+}
+
+// One finished wait = one appended JSON line. (Duplicated in hook.mjs so
+// each script stays self-contained.)
+function creditLedger(ledgerPath, entry) {
+  const now = new Date();
+  const date = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-"); // local date: "today" should mean the user's today
+  const line = JSON.stringify({
+    date,
+    agent: entry.agent,
+    workspace: entry.workspace_id,
+    pane: entry.pane_id,
+    seconds: Math.round((Date.now() - entry.since) / 1000),
+  });
+  appendFileSync(ledgerPath, line + "\n");
 }
