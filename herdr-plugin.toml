@@ -1,0 +1,10 @@
+id = "jyasha11.in-your-face"
+name = "In Your Face"
+version = "0.1.0"
+min_herdr_version = "0.7.3"
+description = "Incredibly In Your Face for blocked agents, plus a shame ledger."
+platforms = ["linux", "macos"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["node", "hook.mjs"]
