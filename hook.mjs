@@ -4,11 +4,25 @@
 // event, with the payload in HERDR_PLUGIN_EVENT_JSON as {event, data};
 // data = {pane_id, workspace_id, agent_status, agent, display_agent, ...}.
 //
+// State layout (HERDR_PLUGIN_STATE_DIR) — one file per fact, so concurrent
+// hook processes never rewrite each other's data:
+//   blocked/<pane>.json  one per blocked pane; deleting it releases the pane
+//   overlay.json         which pane is the overlay; also the "only one
+//                        overlay" lock, taken with an exclusive create
+//   error.log            failures from detached processes land here
+//
 // The grace wait runs in a detached copy of this script
 // (`node hook.mjs grace-timer <pane_id> <since_ms>`) so the hook itself
 // exits in milliseconds and herdr never babysits a sleeping process.
 
-import { readFileSync, writeFileSync, renameSync, appendFileSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  appendFileSync,
+  unlinkSync,
+  mkdirSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
@@ -18,7 +32,12 @@ const GRACE_MS = Number(process.env.IYF_GRACE_MS) || 30_000;
 
 const HERDR = process.env.HERDR_BIN_PATH || "herdr";
 const PLUGIN_ID = process.env.HERDR_PLUGIN_ID || "jyasha11.in-your-face";
-const STATE_PATH = join(process.env.HERDR_PLUGIN_STATE_DIR, "blocked.json");
+const STATE_DIR = process.env.HERDR_PLUGIN_STATE_DIR;
+const BLOCKED_DIR = join(STATE_DIR, "blocked");
+const OVERLAY_PATH = join(STATE_DIR, "overlay.json");
+
+// ":" in pane ids is unfriendly to filenames; the encoding is reversible
+const blockedPath = (paneId) => join(BLOCKED_DIR, encodeURIComponent(paneId) + ".json");
 
 if (process.argv[2] === "grace-timer") {
   await graceTimer(process.argv[3], Number(process.argv[4]));
@@ -30,29 +49,36 @@ function handleEvent() {
   const d = JSON.parse(process.env.HERDR_PLUGIN_EVENT_JSON ?? "{}").data ?? {};
   if (!d.pane_id) return;
 
-  const state = readState();
-  const entry = state.panes[d.pane_id];
-
   if (d.agent_status === "blocked") {
-    if (entry) return; // already tracked; the original grace timer stands
+    mkdirSync(BLOCKED_DIR, { recursive: true });
     const since = Date.now();
-    state.panes[d.pane_id] = {
+    const entry = {
+      pane_id: d.pane_id,
       since,
       agent: d.display_agent ?? d.agent ?? "agent",
       workspace_id: d.workspace_id,
     };
-    writeState(state);
+    try {
+      // exclusive create: if the file exists this pane is already tracked
+      // and the original grace timer stands
+      writeFileSync(blockedPath(d.pane_id), JSON.stringify(entry, null, 2), { flag: "wx" });
+    } catch {
+      return;
+    }
     spawn(
       process.execPath,
       [fileURLToPath(import.meta.url), "grace-timer", d.pane_id, String(since)],
       { detached: true, stdio: "ignore" },
     ).unref();
     console.log(`blocked: ${d.pane_id}, overlay in ${GRACE_MS / 1000}s unless released`);
-  } else if (entry) {
-    delete state.panes[d.pane_id];
-    writeState(state);
+  } else {
+    const entry = readJson(blockedPath(d.pane_id));
+    if (!entry) return; // wasn't blocked, nothing to release
+    try {
+      unlinkSync(blockedPath(d.pane_id));
+    } catch {}
     // stage 4: credit (Date.now() - entry.since) to the shame ledger here.
-    // The overlay watches blocked.json and closes itself once it's empty.
+    // The overlay watches the blocked/ dir and closes itself once it's empty.
     console.log(`released: ${d.pane_id} after ${Math.round((Date.now() - entry.since) / 1000)}s`);
   }
 }
@@ -60,23 +86,11 @@ function handleEvent() {
 async function graceTimer(paneId, since) {
   await new Promise((r) => setTimeout(r, GRACE_MS));
 
-  const state = readState();
-  const entry = state.panes[paneId];
+  const entry = readJson(blockedPath(paneId));
   // Released meanwhile, or re-blocked at a different timestamp (that block
   // spawned its own timer) — either way this timer no longer owns the pane.
   if (!entry || entry.since !== since) return;
-
-  // One overlay at a time. The slot is claimed with "opening" before the
-  // pane exists; a claim is stale if it never materialized within 15s, and
-  // a recorded pane id is stale if that pane is gone (face.mjs crashed).
-  if (state.overlay) {
-    const o = state.overlay;
-    const stale =
-      o.pane === "opening" ? Date.now() - o.at > 15_000 : !paneExists(o.pane);
-    if (!stale) return;
-  }
-  state.overlay = { pane: "opening", at: Date.now() };
-  writeState(state);
+  if (!claimOverlaySlot()) return; // an overlay is already up; it lists everyone
 
   const res = spawnSync(
     HERDR,
@@ -84,36 +98,57 @@ async function graceTimer(paneId, since) {
     { encoding: "utf8" },
   );
   if (res.status !== 0) {
-    // Couldn't open — release the claim so a later timer can retry, and
-    // leave a trace: this process is detached, so nothing else will.
+    // Couldn't open — log it (this process is detached, nothing else will)
+    // and release the claim so a later timer can retry.
     appendFileSync(
-      join(process.env.HERDR_PLUGIN_STATE_DIR, "error.log"),
+      join(STATE_DIR, "error.log"),
       `${new Date().toISOString()} pane open failed status=${res.status} ` +
-        `err=${res.error ?? ""} stderr=${(res.stderr ?? "").trim()} stdout=${(res.stdout ?? "").trim()}\n`,
+        `err=${res.error ?? ""} stderr=${(res.stderr ?? "").trim()}\n`,
     );
-    const s = readState();
-    if (s.overlay?.pane === "opening") {
-      s.overlay = null;
-      writeState(s);
+    const claim = readJson(OVERLAY_PATH);
+    if (claim?.pane === "opening") {
+      try {
+        unlinkSync(OVERLAY_PATH);
+      } catch {}
     }
   }
+  // On success face.mjs replaces "opening" with its real pane id itself.
+}
+
+// Take the one-overlay-at-a-time lock. The exclusive create ("wx") means
+// exactly one of two racing grace timers can win; the loser stands down.
+function claimOverlaySlot() {
+  const claim = JSON.stringify({ pane: "opening", at: Date.now() });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(OVERLAY_PATH, claim, { flag: "wx" });
+      return true;
+    } catch {
+      const cur = readJson(OVERLAY_PATH);
+      // A held claim is stale if "opening" never materialized within 15s,
+      // or if the recorded overlay pane is gone (face.mjs crashed).
+      const stale = !cur
+        ? true
+        : cur.pane === "opening"
+          ? Date.now() - cur.at > 15_000
+          : !paneExists(cur.pane);
+      if (!stale) return false;
+      try {
+        unlinkSync(OVERLAY_PATH);
+      } catch {}
+    }
+  }
+  return false;
 }
 
 function paneExists(paneId) {
   return spawnSync(HERDR, ["pane", "get", paneId], { stdio: "ignore" }).status === 0;
 }
 
-function readState() {
+function readJson(path) {
   try {
-    return JSON.parse(readFileSync(STATE_PATH, "utf8"));
+    return JSON.parse(readFileSync(path, "utf8"));
   } catch {
-    return { panes: {}, overlay: null }; // first run (or unreadable): start clean
+    return null;
   }
-}
-
-function writeState(state) {
-  // temp file + rename, so a concurrent reader never sees a half-written file
-  const tmp = `${STATE_PATH}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(state, null, 2));
-  renameSync(tmp, STATE_PATH);
 }

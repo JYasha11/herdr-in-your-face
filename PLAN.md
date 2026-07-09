@@ -152,10 +152,9 @@ definition of done. Stage 1 smoke test: fake a blocked state, then
    event), the hook never fires for it. Mitigation: `face.mjs` cross-checks
    liveness while rendering and drops dead panes, so the overlay can't get
    stuck; the ledger entry for a killed pane is finalized lazily.
-3. **Does `herdr plugin pane open` print the new pane id?** Unknown until we
-   run it inside a live session. Fallback (planned): `face.mjs` records its
-   own `HERDR_PANE_ID` into `blocked.json`'s meta, so the hook knows an
-   overlay is open without parsing CLI output.
+3. **Does `herdr plugin pane open` print the new pane id?** RESOLVED during
+   stage 2: yes — JSON at `.result.plugin_pane.pane.pane_id`. We don't need
+   it anyway: `face.mjs` records its own `HERDR_PANE_ID` into `overlay.json`.
 4. **`done` is a real `AgentStatus`** in the schema, but
    `herdr pane report-agent --state` and `herdr agent wait --status` only
    accept `idle|working|blocked|unknown`. Doesn't affect us (we only care
@@ -163,3 +162,19 @@ definition of done. Stage 1 smoke test: fake a blocked state, then
 5. **CLI reference page is incomplete** vs `--help` (e.g. `pane report-agent`,
    `pane send-keys`, `plugin config-dir` are undocumented on the page).
    Trusting the binary, per your rule.
+
+## Lessons hit live during stage 2 (kept for the maintainer)
+
+- **Never match a bare Esc byte as a dismiss key** in a raw-mode TUI:
+  terminals deliver focus/paste notifications as `\x1b`-prefixed sequences on
+  stdin, which false-trigger it. This manifested as the overlay closing
+  within milliseconds of opening.
+- **A single shared state JSON invites lost updates**: a grace timer's
+  read-modify-write straddling two release events resurrected deleted
+  entries. Fixed structurally — one file per blocked pane (release = unlink)
+  and `overlay.json` claimed with an exclusive create (`wx`), which is an
+  atomic one-overlay lock.
+- `herdr pane read <id>` prints plain text, not JSON.
+- Testing override: set `IYF_GRACE_MS` in the *server's* environment (export
+  it before launching `herdr`) to shrink the grace period during manual
+  tests; event hooks inherit the server env.
