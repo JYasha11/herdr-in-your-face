@@ -8,3 +8,9 @@ platforms = ["linux", "macos"]
 [[events]]
 on = "pane.agent_status_changed"
 command = ["node", "hook.mjs"]
+
+[[panes]]
+id = "face"
+title = "IN YOUR FACE"
+placement = "overlay"
+command = ["node", "face.mjs"]
