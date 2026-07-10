@@ -65,7 +65,10 @@ untested there).
 - Past the grace period, the overlay opens: big face, a live
   `<agent> in <workspace> has been waiting for 47s` counter, and — if several
   agents are blocked — a footer listing the others. One overlay at a time;
-  the longest-waiting agent gets the spotlight.
+  the longest-waiting agent gets the spotlight. By default it covers the
+  whole herdr window (nothing underneath is paused — it's just a curtain);
+  set `"placement": "split"` in the config if you'd rather be side-eyed
+  from a split pane than screamed at full-screen.
 - The face escalates at configurable thresholds (default 30s / 2min / 5min):
   annoyed → concerned (yellow) → screaming (bold red).
 - If you're already focused on the blocked pane, the overlay stays away by
