@@ -1,5 +1,10 @@
 # PLAN — herdr-in-your-face
 
+> **2026-07-10 update:** the shame ledger + report were split into a fully
+> independent sibling plugin, [herdr-shame-report](https://github.com/JYasha11/herdr-shame-report),
+> with its own event hook and ledger. This plugin is now pure overlay.
+> Sections below describing the ledger/report predate the split.
+
 Verified against **herdr 0.7.3** (installed during planning via the official
 `install.sh` to `~/.local/bin/herdr`; Homebrew on this machine is broken —
 `/opt/homebrew` isn't writable by user `j`, fixing it needs `sudo chown`).

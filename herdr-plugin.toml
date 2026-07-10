@@ -2,7 +2,7 @@ id = "jyasha11.in-your-face"
 name = "In Your Face"
 version = "0.1.0"
 min_herdr_version = "0.7.3"
-description = "Incredibly In Your Face for blocked agents, plus a shame ledger."
+description = "Incredibly In Your Face for blocked AI agents: an escalating scream overlay."
 platforms = ["linux", "macos"]
 
 [[events]]
@@ -15,13 +15,3 @@ title = "IN YOUR FACE"
 placement = "overlay"
 command = ["node", "face.mjs"]
 
-[[panes]]
-id = "report"
-title = "The Shame Report"
-placement = "overlay"
-command = ["node", "face.mjs", "report"]
-
-[[actions]]
-id = "shame-report"
-title = "Show the shame report"
-command = ["node", "hook.mjs", "report"]

@@ -9,9 +9,6 @@
 //   blocked/<pane>.json  one per blocked pane; deleting it releases the pane
 //   overlay.json         which pane is the overlay; also the "only one
 //                        overlay" lock, taken with an exclusive create
-//   ledger.jsonl         the shame ledger: one JSON line per finished wait.
-//                        Append-only, so concurrent writers can't clobber
-//                        each other; the report aggregates at read time.
 //   error.log            failures from detached processes land here
 //
 // The grace wait runs in a detached copy of this script
@@ -39,8 +36,6 @@ const PLUGIN_ID = process.env.HERDR_PLUGIN_ID || "jyasha11.in-your-face";
 const STATE_DIR = process.env.HERDR_PLUGIN_STATE_DIR;
 const BLOCKED_DIR = join(STATE_DIR, "blocked");
 const OVERLAY_PATH = join(STATE_DIR, "overlay.json");
-const LEDGER_PATH = join(STATE_DIR, "ledger.jsonl");
-const REPORT_PATH = join(STATE_DIR, "report.json");
 
 // ":" in pane ids is unfriendly to filenames; the encoding is reversible
 const blockedPath = (paneId) => join(BLOCKED_DIR, encodeURIComponent(paneId) + ".json");
@@ -55,39 +50,25 @@ if (process.argv[2] === "grace-timer") {
       `${new Date().toISOString()} grace-timer crashed: ${e?.stack ?? e}\n`,
     );
   }
-} else if (process.argv[2] === "report") {
-  openReport(); // backs the shame-report manifest action
 } else {
   handleEvent();
-}
-
-function openReport() {
-  const res = spawnSync(
-    HERDR,
-    ["plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", "report", "--focus"],
-    { encoding: "utf8" },
-  );
-  if (res.status !== 0) {
-    console.error(`could not open report pane: ${(res.stderr ?? "").trim()}`);
-    process.exit(1);
-  }
 }
 
 function handleEvent() {
   const d = JSON.parse(process.env.HERDR_PLUGIN_EVENT_JSON ?? "{}").data ?? {};
   if (!d.pane_id) return;
 
-  // Never track the plugin's own panes. Their rendered text (agent names,
+  // Never track the overlay's own pane. Its rendered text (agent names,
   // "waiting", a node process) can trip herdr's agent screen-detection, and
   // the plugin shaming its own face is a feedback loop. Seen in the wild.
-  // The report guard is time-bounded because pane ids can be reused across
-  // server restarts while a stale report.json lingers.
   const overlay = readJson(OVERLAY_PATH);
   if (overlay && d.pane_id === overlay.pane) return;
-  const report = readJson(REPORT_PATH);
-  if (report && d.pane_id === report.pane && Date.now() - report.at < 3600_000) return;
 
   if (d.agent_status === "blocked") {
+    // Back-to-back transitions run their hooks concurrently, so this event
+    // may already be stale (the pane released before we got here) — recording
+    // it would leave an orphaned entry. Trust the pane's current status.
+    if (currentStatus(d.pane_id) !== "blocked") return;
     mkdirSync(BLOCKED_DIR, { recursive: true });
     const since = Date.now();
     const entry = {
@@ -112,15 +93,9 @@ function handleEvent() {
   } else {
     const entry = readJson(blockedPath(d.pane_id));
     if (!entry) return; // wasn't blocked, nothing to release
-    // Deleting the file IS the claim to credit this wait: exactly one of a
-    // release event and the overlay's reality-check can win the unlink, so
-    // the ledger can't be double-credited.
     try {
       unlinkSync(blockedPath(d.pane_id));
-    } catch {
-      return;
-    }
-    creditLedger(LEDGER_PATH, entry);
+    } catch {}
     // The overlay watches the blocked/ dir and closes itself once it's empty.
     console.log(`released: ${d.pane_id} after ${Math.round((Date.now() - entry.since) / 1000)}s`);
   }
@@ -205,6 +180,16 @@ function paneFocused(paneId) {
   }
 }
 
+function currentStatus(paneId) {
+  const res = spawnSync(HERDR, ["pane", "get", paneId], { encoding: "utf8" });
+  if (res.status !== 0) return "gone";
+  try {
+    return JSON.parse(res.stdout).result.pane.agent_status;
+  } catch {
+    return "unknown";
+  }
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -233,21 +218,3 @@ function readJson(path) {
   }
 }
 
-// One finished wait = one appended JSON line. (Duplicated in face.mjs so
-// each script stays self-contained.)
-function creditLedger(ledgerPath, entry) {
-  const now = new Date();
-  const date = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
-    String(now.getDate()).padStart(2, "0"),
-  ].join("-"); // local date: "today" should mean the user's today
-  const line = JSON.stringify({
-    date,
-    agent: entry.agent,
-    workspace: entry.workspace_id,
-    pane: entry.pane_id,
-    seconds: Math.round((Date.now() - entry.since) / 1000),
-  });
-  appendFileSync(ledgerPath, line + "\n");
-}
