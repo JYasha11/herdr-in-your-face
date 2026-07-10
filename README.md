@@ -89,14 +89,21 @@ re-read the file on every event.
 | `grace_seconds` | `30` | how long an agent must be blocked before the overlay appears |
 | `stage_seconds` | `[30, 120, 300]` | seconds (from block start) at which each face stage takes over |
 | `suppress_when_focused` | `true` | don't open the overlay while the blocked pane is focused |
+| `placement` | `"overlay"` | **choose your level of abuse**: `"overlay"` takes over the whole herdr window (the intended experience); `"split"` opens the face as a side pane instead — same face, same escalation, less real estate. (`"tab"` and `"zoomed"` also accepted.) |
 
 ```json
 {
   "grace_seconds": 45,
   "stage_seconds": [45, 180, 600],
-  "suppress_when_focused": true
+  "suppress_when_focused": true,
+  "placement": "split"
 }
 ```
+
+Note the default `overlay` covers your entire herdr window on purpose —
+nothing underneath is paused or frozen; your agents and panes keep running,
+and `q` puts everything back exactly as it was. If that's more face than you
+want while juggling many panes, `"split"` is your setting.
 
 ## How it works
 

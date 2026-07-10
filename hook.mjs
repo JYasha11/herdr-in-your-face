@@ -117,7 +117,13 @@ async function graceTimer(paneId, since) {
   }
   if (!claimOverlaySlot()) return; // an overlay is already up; it lists everyone
 
-  const openArgs = ["plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", "face", "--focus"];
+  const openArgs = [
+    "plugin", "pane", "open",
+    "--plugin", PLUGIN_ID,
+    "--entrypoint", "face",
+    "--placement", CFG.placement, // "overlay" = full-window curtain, "split" = side pane
+    "--focus",
+  ];
   // Pane processes get a clean environment (unlike event hooks, which inherit
   // the server's), so the dev/testing knob must be forwarded explicitly.
   if (process.env.IYF_STAGES_MS) openArgs.push("--env", `IYF_STAGES_MS=${process.env.IYF_STAGES_MS}`);
@@ -198,7 +204,12 @@ function sleep(ms) {
 // bad values fall back to defaults. (Duplicated in face.mjs so each script
 // stays self-contained.)
 function loadConfig() {
-  const defaults = { grace_seconds: 30, stage_seconds: [30, 120, 300], suppress_when_focused: true };
+  const defaults = {
+    grace_seconds: 30,
+    stage_seconds: [30, 120, 300],
+    suppress_when_focused: true,
+    placement: "overlay",
+  };
   const raw = readJson(join(process.env.HERDR_PLUGIN_CONFIG_DIR ?? "", "config.json")) ?? {};
   const cfg = { ...defaults };
   if (Number.isFinite(raw.grace_seconds) && raw.grace_seconds >= 0) cfg.grace_seconds = raw.grace_seconds;
@@ -207,6 +218,7 @@ function loadConfig() {
     if (stages.length > 0) cfg.stage_seconds = stages;
   }
   if (typeof raw.suppress_when_focused === "boolean") cfg.suppress_when_focused = raw.suppress_when_focused;
+  if (["overlay", "split", "tab", "zoomed"].includes(raw.placement)) cfg.placement = raw.placement;
   return cfg;
 }
 
