@@ -189,6 +189,11 @@ definition of done. Stage 1 smoke test: fake a blocked state, then
   event whose pane is the current overlay, and
   `herdr agent explain --file <render.txt> --agent claude` is the offline
   way to check whether rendered content trips a detection rule.
+- **`const`/`let` don't hoist; entry code must come last.** Two separate
+  crashes (report: `sum`/`longest` as const arrows; face: `let faceTimer`)
+  from calling into code above declarations that hadn't initialized yet
+  (temporal dead zone). The entry branch now sits at the bottom of face.mjs
+  with a comment saying why.
 - When faking states with `pane report-agent` on a plain shell pane,
   herdr's own detection eventually overrides the report (idle fallback), so
   the fake "agent" auto-releases after a minute or so. Real agents don't

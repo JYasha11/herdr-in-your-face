@@ -74,10 +74,11 @@ const MIDDLES = {
 };
 
 // Time thresholds (from the moment the agent blocked) at which each stage
-// takes over. Stage 6 makes these configurable; the env var is a dev knob.
-const STAGES_MS = (process.env.IYF_STAGES_MS ?? "30000,120000,300000")
-  .split(",")
-  .map(Number);
+// takes over. From config.json; the env var is a dev knob that beats it
+// (forwarded by hook.mjs via `plugin pane open --env`).
+const STAGES_MS = process.env.IYF_STAGES_MS
+  ? process.env.IYF_STAGES_MS.split(",").map(Number)
+  : loadConfig().stage_seconds.map((s) => s * 1000);
 
 const STAGES = [
   { middle: MIDDLES.annoyed, headline: "AHEM.", color: "" },
@@ -100,14 +101,6 @@ function stageFor(elapsedMs) {
 function padBlock(lines) {
   const w = Math.max(...lines.map((l) => l.length));
   return lines.map((l) => l.padEnd(w));
-}
-
-// ----------------------------------------------------------- entry point ---
-
-if (process.argv[2] === "report") {
-  runReport();
-} else {
-  runFace();
 }
 
 // ------------------------------------------------------------- the face ---
@@ -396,6 +389,22 @@ function writeJson(path, value) {
   renameSync(tmp, path);
 }
 
+// User config from HERDR_PLUGIN_CONFIG_DIR/config.json; every key optional,
+// bad values fall back to defaults. (Duplicated in hook.mjs so each script
+// stays self-contained.)
+function loadConfig() {
+  const defaults = { grace_seconds: 30, stage_seconds: [30, 120, 300], suppress_when_focused: true };
+  const raw = readJson(join(process.env.HERDR_PLUGIN_CONFIG_DIR ?? "", "config.json")) ?? {};
+  const cfg = { ...defaults };
+  if (Number.isFinite(raw.grace_seconds) && raw.grace_seconds >= 0) cfg.grace_seconds = raw.grace_seconds;
+  if (Array.isArray(raw.stage_seconds)) {
+    const stages = raw.stage_seconds.filter((s) => Number.isFinite(s) && s >= 0);
+    if (stages.length > 0) cfg.stage_seconds = stages;
+  }
+  if (typeof raw.suppress_when_focused === "boolean") cfg.suppress_when_focused = raw.suppress_when_focused;
+  return cfg;
+}
+
 // One finished wait = one appended JSON line. (Duplicated in hook.mjs so
 // each script stays self-contained.)
 function creditLedger(ledgerPath, entry) {
@@ -407,4 +416,16 @@ function creditLedger(ledgerPath, entry) {
     seconds: Math.round((Date.now() - entry.since) / 1000),
   });
   appendFileSync(ledgerPath, line + "\n");
+}
+
+// ----------------------------------------------------------- entry point ---
+// Last in the file on purpose: this runs at module load, so everything above
+// (functions hoist, but const/let don't) must already be initialized. A
+// mid-file entry branch caused two temporal-dead-zone crashes during
+// development; don't move it back up.
+
+if (process.argv[2] === "report") {
+  runReport();
+} else {
+  runFace();
 }

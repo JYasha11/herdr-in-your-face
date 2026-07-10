@@ -30,8 +30,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 
-// stage 6 makes this configurable; the env var is a dev/testing override
-const GRACE_MS = Number(process.env.IYF_GRACE_MS) || 30_000;
+const CFG = loadConfig();
+// the env var is a dev/testing override and beats the config file
+const GRACE_MS = Number(process.env.IYF_GRACE_MS) || CFG.grace_seconds * 1000;
 
 const HERDR = process.env.HERDR_BIN_PATH || "herdr";
 const PLUGIN_ID = process.env.HERDR_PLUGIN_ID || "jyasha11.in-your-face";
@@ -45,7 +46,15 @@ const REPORT_PATH = join(STATE_DIR, "report.json");
 const blockedPath = (paneId) => join(BLOCKED_DIR, encodeURIComponent(paneId) + ".json");
 
 if (process.argv[2] === "grace-timer") {
-  await graceTimer(process.argv[3], Number(process.argv[4]));
+  // detached and stdio-less, so a crash here is invisible unless trapped
+  try {
+    await graceTimer(process.argv[3], Number(process.argv[4]));
+  } catch (e) {
+    appendFileSync(
+      join(STATE_DIR, "error.log"),
+      `${new Date().toISOString()} grace-timer crashed: ${e?.stack ?? e}\n`,
+    );
+  }
 } else if (process.argv[2] === "report") {
   openReport(); // backs the shame-report manifest action
 } else {
@@ -118,12 +127,19 @@ function handleEvent() {
 }
 
 async function graceTimer(paneId, since) {
-  await new Promise((r) => setTimeout(r, GRACE_MS));
+  await sleep(GRACE_MS);
 
-  const entry = readJson(blockedPath(paneId));
-  // Released meanwhile, or re-blocked at a different timestamp (that block
-  // spawned its own timer) — either way this timer no longer owns the pane.
-  if (!entry || entry.since !== since) return;
+  // If the user is already looking at the blocked pane, screaming at them
+  // adds nothing — hold off, and re-check until they look away (then scream)
+  // or the pane is released (then stand down). Configurable.
+  for (;;) {
+    const entry = readJson(blockedPath(paneId));
+    // Released meanwhile, or re-blocked at a different timestamp (that block
+    // spawned its own timer) — either way this timer no longer owns the pane.
+    if (!entry || entry.since !== since) return;
+    if (!(CFG.suppress_when_focused && paneFocused(paneId))) break;
+    await sleep(5000);
+  }
   if (!claimOverlaySlot()) return; // an overlay is already up; it lists everyone
 
   const openArgs = ["plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", "face", "--focus"];
@@ -177,6 +193,36 @@ function claimOverlaySlot() {
 
 function paneExists(paneId) {
   return spawnSync(HERDR, ["pane", "get", paneId], { stdio: "ignore" }).status === 0;
+}
+
+function paneFocused(paneId) {
+  const res = spawnSync(HERDR, ["pane", "get", paneId], { encoding: "utf8" });
+  if (res.status !== 0) return false; // pane gone: don't suppress on uncertainty
+  try {
+    return JSON.parse(res.stdout).result.pane.focused === true;
+  } catch {
+    return false;
+  }
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// User config from HERDR_PLUGIN_CONFIG_DIR/config.json; every key optional,
+// bad values fall back to defaults. (Duplicated in face.mjs so each script
+// stays self-contained.)
+function loadConfig() {
+  const defaults = { grace_seconds: 30, stage_seconds: [30, 120, 300], suppress_when_focused: true };
+  const raw = readJson(join(process.env.HERDR_PLUGIN_CONFIG_DIR ?? "", "config.json")) ?? {};
+  const cfg = { ...defaults };
+  if (Number.isFinite(raw.grace_seconds) && raw.grace_seconds >= 0) cfg.grace_seconds = raw.grace_seconds;
+  if (Array.isArray(raw.stage_seconds)) {
+    const stages = raw.stage_seconds.filter((s) => Number.isFinite(s) && s >= 0);
+    if (stages.length > 0) cfg.stage_seconds = stages;
+  }
+  if (typeof raw.suppress_when_focused === "boolean") cfg.suppress_when_focused = raw.suppress_when_focused;
+  return cfg;
 }
 
 function readJson(path) {
