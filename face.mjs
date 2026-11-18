@@ -146,12 +146,12 @@ function renderFace() {
   const lines = stage.face.map(paint);
   lines.push("", `\x1b[1m${stage.color}${stage.headline}\x1b[0m`, "");
   lines.push(
-    `${top.agent} in ${top.workspace_id} has been waiting for \x1b[1m${fmtDur(elapsed)}\x1b[0m`,
+    `${top.agent} in \x1b[1m${whereIs(top)}\x1b[0m has been waiting for \x1b[1m${fmtDur(elapsed)}\x1b[0m`,
   );
   if (entries.length > 1) {
     const others = entries
       .slice(1)
-      .map((e) => `${e.agent} (${fmtDur(Date.now() - e.since)})`)
+      .map((e) => `${e.agent} in ${whereIs(e)} (${fmtDur(Date.now() - e.since)})`)
       .join(", ");
     lines.push("", `\x1b[2malso ignored: ${others}\x1b[0m`);
   }
@@ -172,7 +172,46 @@ function readBlocked() {
     .sort((a, b) => a.since - b.since);
 }
 
+// Workspace/pane ids ("w51") mean nothing to a human; show the space and tab
+// labels the sidebar shows instead. Refreshed in heal(), so renames show up
+// within 5s.
+let spaces = new Map();
+let tabs = new Map(); // tab_id -> label
+let paneTab = new Map(); // pane_id -> tab_id
+
+function herdrList(args, key) {
+  const res = spawnSync(HERDR, args, { encoding: "utf8" });
+  if (res.status !== 0) return null; // keep the last good names
+  try {
+    return JSON.parse(res.stdout).result[key];
+  } catch {
+    return null;
+  }
+}
+
+function refreshNames() {
+  const ws = herdrList(["workspace", "list"], "workspaces");
+  if (ws) spaces = new Map(ws.map((w) => [w.workspace_id, w]));
+  const ts = herdrList(["tab", "list"], "tabs");
+  if (ts) tabs = new Map(ts.map((t) => [t.tab_id, t.label]));
+  const ps = herdrList(["pane", "list"], "panes");
+  if (ps) paneTab = new Map(ps.map((p) => [p.pane_id, p.tab_id]));
+}
+
+function spaceName(id) {
+  const w = spaces.get(id);
+  if (!w) return id; // unknown or server unreachable: fall back to the raw id
+  return w.number != null ? `${w.label} (space ${w.number})` : w.label;
+}
+
+// "space › tab", the same names the sidebar and tab bar show.
+function whereIs(e) {
+  const tab = tabs.get(paneTab.get(e.pane_id));
+  return tab ? `${spaceName(e.workspace_id)} › ${tab}` : spaceName(e.workspace_id);
+}
+
 function heal() {
+  refreshNames();
   const res = spawnSync(HERDR, ["pane", "list"], { encoding: "utf8" });
   if (res.status !== 0) return; // server unreachable: change nothing
   let live;
