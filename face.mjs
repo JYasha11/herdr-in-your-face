@@ -146,12 +146,12 @@ function renderFace() {
   const lines = stage.face.map(paint);
   lines.push("", `\x1b[1m${stage.color}${stage.headline}\x1b[0m`, "");
   lines.push(
-    `${top.agent} in ${top.workspace_id} has been waiting for \x1b[1m${fmtDur(elapsed)}\x1b[0m`,
+    `${top.agent} in \x1b[1m${spaceName(top.workspace_id)}\x1b[0m has been waiting for \x1b[1m${fmtDur(elapsed)}\x1b[0m`,
   );
   if (entries.length > 1) {
     const others = entries
       .slice(1)
-      .map((e) => `${e.agent} (${fmtDur(Date.now() - e.since)})`)
+      .map((e) => `${e.agent} in ${spaceName(e.workspace_id)} (${fmtDur(Date.now() - e.since)})`)
       .join(", ");
     lines.push("", `\x1b[2malso ignored: ${others}\x1b[0m`);
   }
@@ -172,7 +172,28 @@ function readBlocked() {
     .sort((a, b) => a.since - b.since);
 }
 
+// Workspace ids ("w51") mean nothing to a human; show the space's label and
+// sidebar number instead. Refreshed in heal(), so renames show up within 5s.
+let spaces = new Map();
+
+function refreshSpaces() {
+  const res = spawnSync(HERDR, ["workspace", "list"], { encoding: "utf8" });
+  if (res.status !== 0) return; // keep the last good names
+  try {
+    spaces = new Map(
+      JSON.parse(res.stdout).result.workspaces.map((w) => [w.workspace_id, w]),
+    );
+  } catch {}
+}
+
+function spaceName(id) {
+  const w = spaces.get(id);
+  if (!w) return id; // unknown or server unreachable: fall back to the raw id
+  return w.number != null ? `${w.label} (space ${w.number})` : w.label;
+}
+
 function heal() {
+  refreshSpaces();
   const res = spawnSync(HERDR, ["pane", "list"], { encoding: "utf8" });
   if (res.status !== 0) return; // server unreachable: change nothing
   let live;
